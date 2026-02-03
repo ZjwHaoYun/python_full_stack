@@ -3380,124 +3380,65 @@ asyncio.run(main())
 
 ```python
 import time
+import requests
 import re
 import asyncio
 import aiohttp
 import os
-from urllib.parse import urljoin
 
-# 全局请求头：伪装浏览器，避免被目标网站反爬（关键）
-HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
-    "Referer": "https://pic.netbian.com/"  # 图片站必加referer，否则可能403
-}
 
-async def get_page_img_urls(page, session):
-    """
-    获取单页图片路径列表（优化：复用ClientSession，减少连接创建开销）
-    :param page: 页码
-    :param session: 全局aiohttp.ClientSession，复用连接
-    :return: 图片相对路径列表
-    """
-    url = f"https://pic.netbian.com/4kmeinv/index_{page}.html"
-    try:
-        async with session.get(url, verify_ssl=False, headers=HEADERS) as res:
-            # 确保请求成功（状态码200）
-            if res.status != 200:
-                print(f"【页码{page}】请求失败，状态码：{res.status}")
-                return []
-            data = await res.content.read()
-            # 正则提取图片相对路径（兼容原正则，解码用GBK匹配目标站编码）
-            img_paths = re.findall('<img src="(/uploads/allimg/.*?)"', data.decode("GBK"))
-            print(f"【页码{page}】成功提取{len(img_paths)}张图片路径")
-            return img_paths
-    except Exception as e:
-        print(f"【页码{page}】提取图片路径失败：{type(e).__name__} - {str(e)[:60]}")
-        return []
+async def get_page_img_urls(page, session):  # 核心改1：增加session参数（复用连接）
+    # 获取页面内容
+    # res = requests.get(f"https://pic.netbian.com/4kmeinv/index_{2}.html")
 
-async def download_one_img(img_url, img_name, session):
-    """
-    下载单张图片（优化：复用session+with自动管理文件+异常捕获）
-    :param img_url: 图片完整URL
-    :param img_name: 图片保存名称
-    :param session: 全局aiohttp.ClientSession
-    :return: 成功返回True，失败返回False
-    """
-    try:
-        async with session.get(img_url, verify_ssl=False, headers=HEADERS) as res:
-            if res.status != 200:
-                print(f"【失败】{img_name} - 状态码{res.status}")
-                return False
-            # with自动管理文件句柄，避免泄漏，二进制写入图片
-            with open(f"./imgs/{img_name}", "wb") as f:
-                # 分块读取大文件（优化：避免一次性读取占满内存）
-                while chunk := await res.content.read(1024*1024):  # 每次读1MB
-                    f.write(chunk)
-        print(f"【成功】{img_name}")
-        return True
-    except Exception as e:
-        print(f"【失败】{img_name} - {type(e).__name__} - {str(e)[:60]}")
-        return False
+    async with session.get(f"https://pic.netbian.com/4kmeinv/index_{page}.html", verify_ssl=False) as res:
+        data = await res.content.read()
+        # 使用正则表达式提取图片URL
+        ret = re.findall('<img src="(/uploads/allimg/.*?)"', data.decode("GBK"))
+        print(ret)
+        return ret
 
-async def download_page_imgs(img_paths, session):
-    """
-    并行下载单页所有图片（核心优化：gather批量并行，替代串行for+await）
-    :param img_paths: 图片相对路径列表
-    :param session: 全局aiohttp.ClientSession
-    :return: 单页下载成功数量
-    """
+
+async def download_one_img(url, n, session):  # 核心改2：增加session参数（复用连接）
+    # 下载单张图片
+    async with session.get(url, verify_ssl=False) as res:
+        f = open(f"./imgs/{n}", "wb")
+        data = await res.content.read()
+        f.write(data)
+        f.close()
+        print(f"{n}下载成功")
+
+
+async def download_page_imgs(img_urls, session):  # 核心改3：增加session参数+gather并行下载
     domain = "https://pic.netbian.com/"
-    # 生成并行下载协程列表
-    download_coros = []
-    for path in img_paths:
-        img_name = os.path.basename(path)  # 提取文件名作为保存名称
-        img_url = urljoin(domain, path)    # 拼接完整URL（比+号更健壮，处理路径拼接问题）
-        download_coros.append(download_one_img(img_url, img_name, session))
-    # 并行执行所有下载协程，返回结果列表（True=成功，False=失败）
-    page_results = await asyncio.gather(*download_coros)
-    # 统计单页成功数量
-    return sum(page_results)
+    # 原串行for循环替换为gather并行（仅改这几行，其余不变）
+    tasks = []
+    for path in img_urls:
+        title = os.path.basename(path)
+        url = domain + path
+        tasks.append(download_one_img(url, title, session))  # 加入协程，不直接await
+    await asyncio.gather(*tasks)  # 批量并行执行
+
 
 async def main():
-    # 初始化：创建图片保存文件夹（exist_ok=True：已存在则不报错）
-    os.makedirs("./imgs", exist_ok=True)
     start = time.time()
-    total_success = 0  # 统计所有页面总成功下载数
-    total_img_count = 0  # 统计所有页面总图片数
-    page_range = range(2, 6)  # 爬取2-5页（共4页）
-
-    # 核心优化：全局复用aiohttp.ClientSession（避免每次请求创建新连接，提升效率）
+    # 核心改造：全局复用ClientSession+页面并行请求（仅改这部分，其余不变）
+    os.makedirs("./imgs", exist_ok=True)  # 仅加一行创建文件夹，避免报错
     async with aiohttp.ClientSession() as session:
-        # 第一步：并行请求所有页面，提取图片路径（核心优化：页面级并行，替代串行逐页请求）
-        print("===== 开始并行提取所有页面图片路径 =====")
-        page_coros = [get_page_img_urls(page, session) for page in page_range]
-        all_page_img_paths = await asyncio.gather(*page_coros)
-
-        # 第二步：遍历每个页面的图片路径，并行下载单页图片
-        print("\n===== 开始并行下载所有图片 =====")
-        for page, img_paths in zip(page_range, all_page_img_paths):
-            if not img_paths:  # 跳过无图片的页面
-                print(f"【页码{page}】无图片可下载，跳过")
-                continue
-            total_img_count += len(img_paths)
-            # 并行下载当前页所有图片，统计成功数
-            page_success = await download_page_imgs(img_paths, session)
-            total_success += page_success
-            print(f"【页码{page}】下载完成 - 总{len(img_paths)}张 | 成功{page_success}张\n")
-
-    # 最终统计
+        # 1. 并行请求2-5页，提取所有图片路径
+        page_tasks = [get_page_img_urls(i, session) for i in range(2, 6)]
+        all_img_urls = await asyncio.gather(*page_tasks)
+        # 2. 遍历每一页的图片路径，并行下载
+        for img_urls in all_img_urls:
+            if img_urls:  # 跳过空列表
+                await download_page_imgs(img_urls, session)
+    
     end = time.time()
-    cost = round(end - start, 2)
-    print("="*50)
-    print(f"爬取完成！总耗时：{cost}秒")
-    print(f"总图片数：{total_img_count}张 | 成功下载：{total_success}张 | 失败：{total_img_count-total_success}张")
-    print("="*50)
+    print("cost timer:", end - start)
 
-if __name__ == "__main__":
-    # 解决Windows下asyncio的事件循环问题（可选，跨平台兼容）
-    if os.name == "nt":
-        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
-    asyncio.run(main())
+
+asyncio.run(main())
+
 ```
 
 
