@@ -3376,9 +3376,9 @@ asyncio.run(main())
 
 在 `async with session.get(...)` 中，`session.get(...)` 返回一个异步上下文管理器对象 `response`，它负责发送 HTTP 请求并获取响应。在 `async with` 代码块内部，我们可以使用 `response` 对象进行响应的处理，例如读取响应的内容。
 
-改进：
+> 改进：
 
-```
+```python
 import time
 import re
 import asyncio
@@ -3499,7 +3499,7 @@ if __name__ == "__main__":
         asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
     asyncio.run(main())
 
-```
+
 
 ### 今日作业
 
