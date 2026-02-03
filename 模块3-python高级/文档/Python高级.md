@@ -3376,7 +3376,7 @@ asyncio.run(main())
 
 在 `async with session.get(...)` 中，`session.get(...)` 返回一个异步上下文管理器对象 `response`，它负责发送 HTTP 请求并获取响应。在 `async with` 代码块内部，我们可以使用 `response` 对象进行响应的处理，例如读取响应的内容。
 
-> 改进：
+> 改进：上面的代码for循环里写了await download_one_img(...)，这个await会让当前协程阻塞：下一张图片的下载，必须等上一张的download_one_img完全执行完（包括网络请求、文件写入）才会开始
 
 ```python
 import time
